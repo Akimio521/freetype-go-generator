@@ -27,7 +27,6 @@ var (
 	j    = fmt.Sprint(runtime.GOMAXPROCS(-1))
 )
 
-// runCommand 替代 util.MustShell
 func runCommand(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	cmd.Stdout = os.Stdout
@@ -35,7 +34,6 @@ func runCommand(name string, args ...string) error {
 	return cmd.Run()
 }
 
-// runInDir 替代 util.MustInDir
 func runInDir(dir string, fn func() error) error {
 	oldDir, err := os.Getwd()
 	if err != nil {
@@ -96,19 +94,10 @@ func CopyFile(src, dst string) error {
 }
 
 func cleanupSubmodule(submodulePath string) error {
-	// 清理 submodule 中的所有未跟踪文件和变更
 	if err := runCommand("git", "-C", submodulePath, "clean", "-fdx"); err != nil {
 		return err
 	}
-	// 重置所有变更到 HEAD
 	if err := runCommand("git", "-C", submodulePath, "reset", "--hard", "HEAD"); err != nil {
-		return err
-	}
-	// 清理所有子模块
-	if err := runCommand("git", "-C", submodulePath, "submodule", "foreach", "--recursive", "git clean -fdx"); err != nil {
-		return err
-	}
-	if err := runCommand("git", "-C", submodulePath, "submodule", "foreach", "--recursive", "git reset --hard HEAD"); err != nil {
 		return err
 	}
 	return nil
@@ -122,13 +111,19 @@ func main() {
 		return
 	}
 
+	fmt.Println("buiding for", target)
+
 	switch runtime.GOOS {
 	case "linux":
 		make = "make"
 		sed = "sed"
 
-	case "freebsd", "openbsd", "darwin":
+	case "darwin":
 		make = "make"
+		sed = "gsed"
+
+	case "freebsd", "openbsd":
+		make = "gmake"
 		sed = "gsed"
 
 	case "windows":
@@ -166,7 +161,7 @@ func main() {
 			return err
 		}
 
-		config := []string{os.Args[0]}
+		ccgoConfig := []string{os.Args[0]}
 		cflags := []string{"-DFT_CONFIG_OPTION_NO_ASSEMBLER"}
 		switch target {
 		case "linux/amd64":
@@ -176,22 +171,17 @@ func main() {
 		}
 		m64Double := cc.LongDouble64Flag(runtime.GOOS, runtime.GOARCH)
 		if m64Double != "" {
-			config = append(config, m64Double)
+			ccgoConfig = append(ccgoConfig, m64Double)
 		}
-		if err := runCommand("sh", "-c", fmt.Sprintf(`
-CFLAGS='%s' ./configure \
-	--disable-shared \
-	--with-brotli=no \
-	--with-bzip2=no \
-	--with-harfbuzz=no \
-	--with-png=no \
-	--with-zlib=yes \
-`, //TODO brotli, png
-			strings.Join(cflags, " ")),
-		); err != nil {
-			return err
+
+		freetypeConfigs := []string{"--disable-shared", "--with-brotli=no", "--with-bzip2=no", "--with-harfbuzz=no", "--with-png=no", "--with-zlib=yes"}
+		cmdLine := "CFLAGS=" + strings.Join(cflags, " ") + " ./configure " + strings.Join(freetypeConfigs, " ")
+		err := runCommand("sh", "-c", cmdLine)
+		if err != nil {
+			return fmt.Errorf("failed to run configure: %w", err)
 		}
-		config = append(config,
+
+		ccgoConfig = append(ccgoConfig,
 			"--package-name", packageName,
 			"--prefix-enumerator=_",
 			"--prefix-external=x_",
@@ -207,22 +197,27 @@ CFLAGS='%s' ./configure \
 			"-ignore-unsupported-alignment",
 			"-I", freetypeHeaderDir,
 		)
-		if err := ccgo.NewTask(runtime.GOOS, runtime.GOARCH, append(config, "-exec", make, "-j", j, "library"), os.Stdout, os.Stderr, nil).Exec(); err != nil {
-			return err
+
+		err = ccgo.NewTask(runtime.GOOS, runtime.GOARCH, append(ccgoConfig, "-exec", make, "-j", j, "library"), os.Stdout, os.Stderr, nil).Exec()
+		if err != nil {
+			return fmt.Errorf("failed to build freetype library: %w", err)
+		}
+		err = ccgo.NewTask(runtime.GOOS, runtime.GOARCH, append(ccgoConfig, "-o", result, aname, "-lz"), os.Stdout, os.Stderr, nil).Main()
+		if err != nil {
+			return fmt.Errorf("failed to generate ccgo bindings: %w", err)
 		}
 
-		if err := ccgo.NewTask(runtime.GOOS, runtime.GOARCH, append(config, "-o", result, aname, "-lz"), os.Stdout, os.Stderr, nil).Main(); err != nil {
-			return err
+		err = runCommand(sed, "-i", `s/\<T__\([a-zA-Z0-9][a-zA-Z0-9_]\+\)/t__\1/g`, result)
+		if err != nil {
+			return fmt.Errorf("failed to replace T__ with t__: %w", err)
 		}
-
-		if err := runCommand(sed, "-i", `s/\<T__\([a-zA-Z0-9][a-zA-Z0-9_]\+\)/t__\1/g`, result); err != nil {
-			return err
+		err = runCommand(sed, "-i", `s/\<x_\([a-zA-Z0-9][a-zA-Z0-9_]\+\)/X\1/g`, result)
+		if err != nil {
+			return fmt.Errorf("failed to replace x_ with X: %w", err)
 		}
-		if err := runCommand(sed, "-i", `s/\<x_\([a-zA-Z0-9][a-zA-Z0-9_]\+\)/X\1/g`, result); err != nil {
-			return err
-		}
-		if err := runCommand(sed, "-i", `/^[[:space:]]*\/\/ Code generate/,+1d`, result); err != nil {
-			return err
+		err = runCommand(sed, "-i", `/^[[:space:]]*\/\/ Code generate/,+1d`, result)
+		if err != nil {
+			return fmt.Errorf("failed to remove code generation comment: %w", err)
 		}
 		return nil
 	}); err != nil {
