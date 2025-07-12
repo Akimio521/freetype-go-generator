@@ -269,7 +269,13 @@ func main() {
 		}
 		fmt.Println("freetype library built successfully, starting to generate ccgo bindings...")
 
-		err = ccgo.NewTask(targetOS, targetArch, append(ccgoConfig, "-o", result, aname, "-lz"), os.Stdout, os.Stderr, nil).Main()
+		// Use absolute path for the library file
+		libPath, err := filepath.Abs(aname)
+		if err != nil {
+			return fmt.Errorf("failed to get absolute path for library: %w", err)
+		}
+
+		err = ccgo.NewTask(targetOS, targetArch, append(ccgoConfig, "-o", result, libPath), os.Stdout, os.Stderr, nil).Main()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ccgo bindings generation failed: %v\n", err)
 			return fmt.Errorf("failed to generate ccgo bindings: %w", err)
