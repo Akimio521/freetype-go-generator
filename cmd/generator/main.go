@@ -229,7 +229,7 @@ func main() {
 		ccgoConfig := []string{os.Args[0]}
 		cflags := []string{"-DFT_CONFIG_OPTION_NO_ASSEMBLER"}
 		switch target {
-		case target:
+		case "linux/amd64":
 			if err := runCommand(sed, "-i", `s/FT_SSE2 1/FT_SSE2 0/g`, "src/smooth/ftgrays.c"); err != nil {
 				return err
 			}
