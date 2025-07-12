@@ -6,11 +6,7 @@ import (
 	"unsafe"
 
 	"github.com/Akimio521/freetype-go-generator/libfreetype"
-	_ "modernc.org/cc/v4"
-	_ "modernc.org/ccgo/v4/lib"
-	_ "modernc.org/fileutil/ccgo"
 	"modernc.org/libc"
-	_ "modernc.org/libz"
 )
 
 var (
