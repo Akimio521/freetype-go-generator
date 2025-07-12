@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/Akimio521/freetype-go-generator/libfreetype"
 	"modernc.org/cc/v4"
 	ccgo "modernc.org/ccgo/v4/lib"
 )
@@ -103,6 +104,16 @@ func cleanupSubmodule(submodulePath string) error {
 	return nil
 }
 
+func checkoutSubmoduleTag(submodulePath, tag string) error {
+	if err := runCommand("git", "-C", submodulePath, "fetch", "--tags"); err != nil {
+		return fmt.Errorf("failed to fetch tags: %w", err)
+	}
+	if err := runCommand("git", "-C", submodulePath, "checkout", tag); err != nil {
+		return fmt.Errorf("failed to checkout tag %s: %w", tag, err)
+	}
+	return nil
+}
+
 func main() {
 	if ccgo.IsExecEnv() {
 		if err := ccgo.NewTask(runtime.GOOS, runtime.GOARCH, os.Args, os.Stdout, os.Stderr, nil).Main(); err != nil {
@@ -140,13 +151,22 @@ func main() {
 	}
 
 	// clean change for freetype submodule
-	if err := cleanupSubmodule(libRoot); err != nil {
+	err = cleanupSubmodule(libRoot)
+	if err != nil {
 		panic(fmt.Sprintf("failed to cleanup submodule: %v", err))
 	}
 
-	CopyDir(filepath.Join("internal", "overlay", "all"), libRoot)
+	err = CopyDir("internal", libRoot)
+	if err != nil {
+		panic(fmt.Sprintf("failed to copy overlay files: %v", err))
+	}
 
-	if err := runInDir(libRoot, func() error {
+	err = checkoutSubmoduleTag(libRoot, fmt.Sprintf("VER-%d-%d-%d", libfreetype.MAJOR, libfreetype.MINOR, libfreetype.PATCH))
+	if err != nil {
+		panic(fmt.Sprintf("failed to checkout submodule tag: %v", err))
+	}
+
+	buildFn := func() error {
 		if err := runCommand("go", "mod", "init", "example.com/libfreetype"); err != nil {
 			return err
 		}
@@ -221,14 +241,21 @@ func main() {
 			return fmt.Errorf("failed to remove code generation comment: %w", err)
 		}
 		return nil
-	}); err != nil {
-		panic(err)
+	}
+	err = runInDir(libRoot, buildFn)
+	if err != nil {
+		panic(fmt.Sprintf("failed to build freetype library and generate ccgo bindings: %v", err))
 	}
 
-	CopyFile(filepath.Join(libRoot, result), packageName+"/"+"ccgo"+"_"+runtime.GOOS+"_"+runtime.GOARCH+".go")
+	err = CopyFile(filepath.Join(libRoot, result), packageName+"/"+"ccgo"+"_"+runtime.GOOS+"_"+runtime.GOARCH+".go")
+	if err != nil {
+		panic(fmt.Sprintf("failed to copy generated file: %v", err))
+	}
 
-	if err := cleanupSubmodule(libRoot); err != nil {
+	err = cleanupSubmodule(libRoot)
+	if err != nil {
 		panic(fmt.Sprintf("failed to cleanup submodule: %v", err))
 	}
+
 	fmt.Printf("Successfully generated ccgo bindings for %s/%s and cleaned up submodule\n", runtime.GOOS, runtime.GOARCH) //nolint:forbidigo
 }
