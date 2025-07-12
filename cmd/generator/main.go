@@ -224,6 +224,7 @@ func main() {
 
 		err = ccgo.NewTask(runtime.GOOS, runtime.GOARCH, append(ccgoConfig, "-o", result, aname, "-lz"), os.Stdout, os.Stderr, nil).Main()
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "ccgo bindings generation failed: %v\n", err)
 			return fmt.Errorf("failed to generate ccgo bindings: %w", err)
 		}
 		fmt.Println("ccgo bindings generated successfully, starting to clean up...")
