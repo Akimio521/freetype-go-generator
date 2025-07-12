@@ -202,10 +202,13 @@ func main() {
 		if err != nil {
 			return fmt.Errorf("failed to build freetype library: %w", err)
 		}
+		fmt.Println("freetype library built successfully, starting to generate ccgo bindings...")
+
 		err = ccgo.NewTask(runtime.GOOS, runtime.GOARCH, append(ccgoConfig, "-o", result, aname, "-lz"), os.Stdout, os.Stderr, nil).Main()
 		if err != nil {
 			return fmt.Errorf("failed to generate ccgo bindings: %w", err)
 		}
+		fmt.Println("ccgo bindings generated successfully, starting to clean up...")
 
 		err = runCommand(sed, "-i", `s/\<T__\([a-zA-Z0-9][a-zA-Z0-9_]\+\)/t__\1/g`, result)
 		if err != nil {
