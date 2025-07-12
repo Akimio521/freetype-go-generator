@@ -139,8 +139,6 @@ func main() {
 		panic(fmt.Sprintf("cannot get absolute path for freetype: %v", err))
 	}
 
-	makeRoot := libRoot
-
 	// clean change for freetype submodule
 	if err := cleanupSubmodule(libRoot); err != nil {
 		panic(fmt.Sprintf("failed to cleanup submodule: %v", err))
@@ -148,7 +146,7 @@ func main() {
 
 	CopyDir(filepath.Join("internal", "overlay", "all"), libRoot)
 
-	if err := runInDir(makeRoot, func() error {
+	if err := runInDir(libRoot, func() error {
 		if err := runCommand("go", "mod", "init", "example.com/libfreetype"); err != nil {
 			return err
 		}
