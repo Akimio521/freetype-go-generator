@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/Akimio521/freetype-go-generator/libfreetype"
-	"modernc.org/cc/v4"
+	ccv4 "modernc.org/cc/v4"
 	ccgo "modernc.org/ccgo/v4/lib"
 )
 
@@ -19,14 +19,56 @@ const (
 	aname             = "objs/.libs/libfreetype.a"
 	result            = "ccgo.go"
 	packageName       = "libfreetype"
-	target            = runtime.GOOS + "/" + runtime.GOARCH
 )
 
+var hostMap = map[string]string{
+	"linux/386":     "i386-linux-gnu",
+	"linux/amd64":   "x86_64-linux-gnu",
+	"linux/arm":     "arm-linux-gnueabihf",
+	"linux/arm64":   "aarch64-linux-gnu",
+	"windows/amd64": "x86_64-w64-mingw32",
+	"windows/arm64": "aarch64-w64-mingw32",
+	"darwin/amd64":  "x86_64-apple-darwin",
+	"darwin/arm64":  "aarch64-apple-darwin",
+}
+
 var (
-	make string
-	sed  string
-	j    = fmt.Sprint(runtime.GOMAXPROCS(-1))
+	make       string
+	sed        string
+	targetOS   string
+	targetArch string
+	target     string
+	host       string
+	cc         string
+	ar         string
+	ranlib     string
+	strip      string
+	j          string = fmt.Sprint(runtime.GOMAXPROCS(-1))
 )
+
+func init() {
+	targetOS = getEnv("TARGET_OS", runtime.GOOS)
+	targetArch = getEnv("TARGET_ARCH", runtime.GOARCH)
+	target = targetOS + "/" + targetArch
+	var ok bool
+	host, ok = hostMap[target]
+	if !ok {
+		panic(fmt.Sprintf("unsupported target %s", target))
+	}
+
+	cc = getEnv("CCGO_CC", "gcc")
+	ar = getEnv("CCGO_AR", "ar")
+	ranlib = getEnv("CCGO_RANLIB", "ranlib")
+	strip = getEnv("CCGO_STRIP", "strip")
+}
+
+func getEnv(key, defaultVal string) string {
+	val := os.Getenv(key)
+	if val == "" {
+		return defaultVal
+	}
+	return val
+}
 
 func runCommand(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
@@ -105,24 +147,29 @@ func cleanupSubmodule(submodulePath string) error {
 }
 
 func checkoutSubmoduleTag(submodulePath, tag string) error {
-	if err := runCommand("git", "-C", submodulePath, "fetch", "--tags"); err != nil {
-		return fmt.Errorf("failed to fetch tags: %w", err)
-	}
-	if err := runCommand("git", "-C", submodulePath, "checkout", tag); err != nil {
-		return fmt.Errorf("failed to checkout tag %s: %w", tag, err)
-	}
+	// if err := runCommand("git", "-C", submodulePath, "fetch", "--tags"); err != nil {
+	// 	return fmt.Errorf("failed to fetch tags: %w", err)
+	// }
+	// if err := runCommand("git", "-C", submodulePath, "checkout", tag); err != nil {
+	// 	return fmt.Errorf("failed to checkout tag %s: %w", tag, err)
+	// }
 	return nil
 }
 
 func main() {
 	if ccgo.IsExecEnv() {
-		if err := ccgo.NewTask(runtime.GOOS, runtime.GOARCH, os.Args, os.Stdout, os.Stderr, nil).Main(); err != nil {
+		if err := ccgo.NewTask(targetOS, targetArch, os.Args, os.Stdout, os.Stderr, nil).Main(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 		}
 		return
 	}
 
-	fmt.Println("buiding for", target)
+	fmt.Println("building for", target)
+	fmt.Println("using host:", host)
+	fmt.Println("using compiler:", cc)
+	fmt.Println("using archiver:", ar)
+	fmt.Println("using ranlib:", ranlib)
+	fmt.Println("using strip:", strip)
 
 	switch runtime.GOOS {
 	case "linux":
@@ -182,18 +229,18 @@ func main() {
 		ccgoConfig := []string{os.Args[0]}
 		cflags := []string{"-DFT_CONFIG_OPTION_NO_ASSEMBLER"}
 		switch target {
-		case "linux/amd64":
+		case target:
 			if err := runCommand(sed, "-i", `s/FT_SSE2 1/FT_SSE2 0/g`, "src/smooth/ftgrays.c"); err != nil {
 				return err
 			}
 		}
-		m64Double := cc.LongDouble64Flag(runtime.GOOS, runtime.GOARCH)
+		m64Double := ccv4.LongDouble64Flag(targetOS, targetArch)
 		if m64Double != "" {
 			ccgoConfig = append(ccgoConfig, m64Double)
 		}
 
 		freetypeConfigs := []string{"--disable-shared", "--with-brotli=no", "--with-bzip2=no", "--with-harfbuzz=no", "--with-png=no", "--with-zlib=yes"}
-		cmdLine := "CFLAGS=" + strings.Join(cflags, " ") + " ./configure " + strings.Join(freetypeConfigs, " ")
+		cmdLine := "CFLAGS=" + strings.Join(cflags, " ") + " CC=" + cc + " AR=" + ar + " RANLIB=" + ranlib + " STRIP=" + strip + " ./configure " + strings.Join(freetypeConfigs, " ") + " --host=" + host
 		err := runCommand("sh", "-c", cmdLine)
 		if err != nil {
 			return fmt.Errorf("failed to run configure: %w", err)
@@ -216,13 +263,13 @@ func main() {
 			"-I", freetypeHeaderDir,
 		)
 
-		err = ccgo.NewTask(runtime.GOOS, runtime.GOARCH, append(ccgoConfig, "-exec", make, "-j", j, "library"), os.Stdout, os.Stderr, nil).Exec()
+		err = ccgo.NewTask(targetOS, targetArch, append(ccgoConfig, "-exec", make, "-j", j, "library"), os.Stdout, os.Stderr, nil).Exec()
 		if err != nil {
 			return fmt.Errorf("failed to build freetype library: %w", err)
 		}
 		fmt.Println("freetype library built successfully, starting to generate ccgo bindings...")
 
-		err = ccgo.NewTask(runtime.GOOS, runtime.GOARCH, append(ccgoConfig, "-o", result, aname, "-lz"), os.Stdout, os.Stderr, nil).Main()
+		err = ccgo.NewTask(targetOS, targetArch, append(ccgoConfig, "-o", result, aname, "-lz"), os.Stdout, os.Stderr, nil).Main()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ccgo bindings generation failed: %v\n", err)
 			return fmt.Errorf("failed to generate ccgo bindings: %w", err)
@@ -248,7 +295,7 @@ func main() {
 		panic(fmt.Sprintf("failed to build freetype library and generate ccgo bindings: %v", err))
 	}
 
-	err = CopyFile(filepath.Join(libRoot, result), packageName+"/"+"ccgo"+"_"+runtime.GOOS+"_"+runtime.GOARCH+".go")
+	err = CopyFile(filepath.Join(libRoot, result), packageName+"/"+"ccgo"+"_"+targetOS+"_"+targetArch+".go")
 	if err != nil {
 		panic(fmt.Sprintf("failed to copy generated file: %v", err))
 	}
@@ -258,5 +305,5 @@ func main() {
 		panic(fmt.Sprintf("failed to cleanup submodule: %v", err))
 	}
 
-	fmt.Printf("Successfully generated ccgo bindings for %s/%s and cleaned up submodule\n", runtime.GOOS, runtime.GOARCH) //nolint:forbidigo
+	fmt.Printf("Successfully generated ccgo bindings for %s and cleaned up submodule\n", target)
 }
